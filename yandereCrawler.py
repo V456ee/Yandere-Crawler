@@ -1,43 +1,92 @@
 import requests
 from bs4 import BeautifulSoup
 import multiprocessing
+import json
+import os
 
 
 def mainfunc():
-    print('您的CPU核心数为：{0}\n本程序将启用{0}个异步进程抓取图片'.format(multiprocessing.cpu_count()))
-    xy = pageinput()
-    x = xy[0]
-    y = xy[1]
+    cpu_count = multiprocessing.cpu_count()
+    print('您的CPU核心数为：{0}\n本程序将启用{0}个异步进程抓取图片'.format(cpu_count))
+    # 调用用户输入
+    page_range_tag = pageinput()
+    #读取起止页，tag
+    start_page = page_range_tag[0]
+    end_page = page_range_tag[1]
+    tag = page_range_tag[2]
     print('正在读取所有链接...')
     p = multiprocessing.Pool()
-    imgpagelists = p.map(showlink_crawler, range(x, y))
-    imgpagelist = listextender(imgpagelists)
-    print('已成功读取所有图片页面链接：\n', imgpagelist)
-    savepath = input('输入保存路径开始下载:')+'\\'
-    custom(savepath)
-    for imglink in imgpagelist:
-        p.apply_async(downloader, (savepath, imglink,))
-    p.close()
-    p.join()
-    print('下载已全部完成！')
-    contn = input('是否继续？[y/n]:')
-    if contn == 'y':
-        mainfunc()
+    #整理参数
+    page_with_tag = []
+    for page in range(start_page, end_page):
+        page_add = (page, tag)
+        page_with_tag.append(page_add)
+    #解析所有图片详情页链接
+    imgpage_lists = p.map(showlink_crawler, page_with_tag)
+    #解压嵌套列表
+    imgpagelist = listextender(imgpage_lists)
+    if len(imgpagelist):
+        print('已成功读取所有图片页面链接：\n', imgpagelist)
+        savepath = savepath_wr()
+        #路径不存在时创建新文件夹
+        if not os.path.exists(savepath):
+            os.mkdir(savepath)
+        custom(savepath)
+        for imglink in imgpagelist:
+            p.apply_async(downloader, (savepath, imglink))
+        p.close()
+        p.join()
+        print('下载已全部完成！')
+        continue_ask = input('是否继续？[y/n]:')
+        if continue_ask == 'y' or 'Y':
+            mainfunc()
+        else:
+            exit()
+    #列表为空==当前tag无结果
     else:
-        exit()
+        print('未能搜索到任何图片，请尝试更换TAG')
+        mainfunc()
+
+
+def savepath_wr():
+    try:
+        with open('usrconfig.json', 'r') as config:
+            saveconfig = json.load(config)
+        savepath = saveconfig['SavePath']
+        save_ask = input('检测到上次保存配置为\n{}\n如无需更改请输入“y”，或输入新的保存位置：'.format(savepath))
+        if save_ask == 'y' or 'Y':
+            return savepath
+        else:    #将新路径存入配置文件
+            save_ask = save_ask+'\\'
+            save_ask = save_ask.replace('\\', '/')
+            savepath_config = {'SavePath': save_ask+'\\'}
+            with open('usrconfig.json', 'w') as config:
+                json.dump(savepath_config, config)
+            return savepath
+    except FileNotFoundError:
+        savepath = input('未检测到配置文件，请输入保存位置：')+'\\'
+        savepath = savepath.replace('\\', '/')
+        savepath_config = {'SavePath': savepath}
+        with open('usrconfig.json', 'w') as config:
+            json.dump(savepath_config, config)
+        return savepath
+
 
 
 def pageinput():
     try:
-        x = input('输入你希望下载的起始页码(默认为1):')
-        if x == '':
-            x = 1
+        tag = input('输入你希望下载的图片tag(选填):')
+        tag = tag.replace(" ", "_")
+        print(tag)
+        start_page = input('输入你希望下载的起始页码(默认为1):')
+        if start_page == '':
+            start_page = 1
         else:
-            x = int(x)
-        y = input('输入你希望下载的最终页码:')
-        y = int(y) + 1
-        if x != 0 and x < y:
-            return x, y
+            start_page = int(start_page)
+        end_page = input('输入你希望下载的最终页码:')
+        end_page = int(end_page) + 1
+        if start_page != 0 and start_page < end_page:
+            return start_page, end_page, tag
         else:
             print('您的输入有误，请输入半角数字，并确保起始页码不为零且小于最终页码！')
             pageinput()
@@ -50,7 +99,7 @@ def custom(savepath):
     usercus = input(
         '在开始下载前是否需要清空log文件？如果您首次使用可任意选择，否则可能导致重复下载。\n'
         '请输入y或n进行选择(y:是，n:否):')
-    if usercus == 'y':
+    if usercus == 'y' or 'Y':
         with open(savepath + 'log.json', 'w', encoding='utf-8')as logtext:
             logtext.writelines('*********************Download Log*********************\n')
     else:
@@ -61,6 +110,7 @@ def downloader(savepath, imglink):
     link = link_resolver(imglink).get('href')
     imgnm = imglink.strip('https://yande.re/post/show/') + link[-4:]
     try:
+        #用于下载过图片后被手动删除的情况，如为误删可先清空log以重下
         with open(savepath + 'log.json', 'r', encoding='utf-8')as logread:
             logs = logread.readlines()
         if imgnm + '\n' in logs:
@@ -85,8 +135,11 @@ def listextender(pagelists):
     return imgpagelist
 
 
-def showlink_crawler(a):
-    url = "https://yande.re/post?page={}".format(a)
+def showlink_crawler(page_range):
+    page = page_range[0]
+    tag = page_range[1]
+    url = "https://yande.re/post?page={0}&tags={1}".format(page, tag)
+    print(url)
     data = requests.get(url, headers=
                         {"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:58.0) Gecko/20100101 Firefox/58.0"}
                         )
@@ -114,7 +167,14 @@ def file_saver(link, filepath):
         with open(filepath):
             print('当前图片已存在，不保存')
     except FileNotFoundError:
-        pic = requests.get(link, timeout=30)
+        i=0
+        while i < 3:
+            try:
+                pic = requests.get(link, timeout=(30, 600))
+                i = 3
+            except requests.exceptions.RequestException as timeout_err:
+                print(timeout_err)
+                i += 1
         with open(filepath, 'wb') as fp:
             fp.write(pic.content)
             print('图片已成功保存至{}'.format(filepath))
